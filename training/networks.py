@@ -357,11 +357,26 @@ class SynthesisBlock(torch.nn.Module):
 
         if in_channels == 0:
             self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
+            # print('########################################')
+            # print('# INITIAL SEED STUFF                   #')
+            # print('# shape: ')
+            # print(self.const.shape)
+            # print('# the actual tensor:' )
+            # print(self.const)
 
         if in_channels != 0:
+            self.const = torch.nn.Parameter(torch.randn([out_channels, resolution, resolution]))
             self.conv0 = SynthesisLayer(in_channels, out_channels, w_dim=w_dim, resolution=resolution, up=2,
                 resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
             self.num_conv += 1
+            torch.manual_seed(self.num_conv)
+            # print('########################################')
+            # print('# LATER SEED STUFF                     #')
+            # print('# shape: ')
+            # print(self.const.shape)
+            # print('# the actual tensor:' )
+            # print(self.const)
+
 
         self.conv1 = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
             conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
