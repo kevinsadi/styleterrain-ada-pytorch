@@ -183,6 +183,8 @@ class ImageFolderDataset(Dataset):
 
         PIL.Image.init()
         self._image_fnames = sorted(fname for fname in self._all_fnames if self._file_ext(fname) in PIL.Image.EXTENSION)
+        # yy
+        self._image_fnames = sorted(fname for fname in self._all_fnames if '.npy' in fname)
         if len(self._image_fnames) == 0:
             raise IOError('No image files found in the specified path')
 
@@ -221,11 +223,15 @@ class ImageFolderDataset(Dataset):
 
     def _load_raw_image(self, raw_idx):
         fname = self._image_fnames[raw_idx]
-        with self._open_file(fname) as f:
-            if pyspng is not None and self._file_ext(fname) == '.png':
-                image = pyspng.load(f.read())
-            else:
-                image = np.array(PIL.Image.open(f))
+        # yy
+        if '.npy' in fname:
+            image = np.load(self._path)[fname].astype(np.uint8)
+        else:
+            with self._open_file(fname) as f:
+                if pyspng is not None and self._file_ext(fname) == '.png':
+                    image = pyspng.load(f.read())
+                else:
+                    image = np.array(PIL.Image.open(f))
         if image.ndim == 2:
             image = image[:, :, np.newaxis] # HW => HWC
         image = image.transpose(2, 0, 1) # HWC => CHW
