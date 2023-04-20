@@ -446,16 +446,17 @@ def generate_images(
             print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
             z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
             # ks
-            print('This is the w that made this image')
-            w = G.mapping(z, label, truncation_psi=truncation_psi, truncation_cutoff=8)
-            print(w.shape)
-            # img = G.synthesis(w.unsqueeze(0), noise_mode=noise_mode)
-            #print('Here is what I think the thing I want is')
-            #print(G.synthesis.b4)
+            # print('This is the w that made this image')
+            # w = G.mapping(z, label, truncation_psi=truncation_psi, truncation_cutoff=8)
+            # w = torch.tensor(w, device=device)
+            # print(w.shape)
+            img = G.synthesis(w.unsqueeze(0), noise_mode=noise_mode)
+            # print('Here is what I think the thing I want is')
+            # print(G.synthesis.b4)
 
-            print('here is what I think is the synthesis network')
-            #print(G.synthesis.b4.constant)
-            print(G.synthesis)
+            # print('here is what I think is the synthesis network')
+            # print(G.synthesis.b4.constant)
+            # print(G.synthesis)
 
             img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
@@ -617,44 +618,47 @@ def generate_stitch_images(
 
     # Generate the stitch image and do 'backprop'
 
-    seed = 100000
+    seed = 55
     lmbda = 1
-    max_iter = 100
-    step_size = .001 # learning rate
+    max_iter = 20
+    step_size = .005 # learning rate
 
-    print('updated 24')
+    print('updated 44')
 
     prev_z = torch.tensor(np.random.RandomState(seed).randn(1, G.z_dim), requires_grad=True).to(device) # generate z from gaussian noise
-    prev_image = G(prev_z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+    w = G.mapping(prev_z, label, truncation_psi=truncation_psi, truncation_cutoff=8)
+    prev_image = G.synthesis(w, noise_mode=noise_mode)
     prev_image = (prev_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255) # this is our 'previous chunk' we are trying to fit to
     np.save(f'{outdir}/prev_chunk', np.squeeze(prev_image.to(torch.uint8).cpu().detach().numpy()))
 
     z = torch.tensor(np.random.RandomState(seed + 1).randn(1, G.z_dim), requires_grad=True).to(device)
+    w = G.mapping(z, label, truncation_psi=truncation_psi, truncation_cutoff=8)
+
     for i in range(max_iter): # gradient descent
-        x_hat = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        x_hat = (x_hat.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255)
-        # we normalize z for our regularization term, then we have our edge constraint
-        #print(f'iter is : {i / max_iter}')
-        loss = torch.norm(z) + (1) * calc_horizontal_image_similarity(prev_image, x_hat)    # maybe make this!!! requires_grad 
-        dz = torch.autograd.grad(outputs=loss, inputs=z) # THIS COULD CAUSE ISSUES POTENTIALLY
-        print(f'norm of my gradient is: {torch.norm(dz[0])}')
-        z_next = z - step_size * dz[0]
-        print(f'dz[0] is :')
-        print(dz[0].size())
-        print(f'z shape is:')
-        print(z.size())
-        residual = torch.norm(z_next - z)
-        print(residual)
-        z = z_next
-        if (residual < 0.0005):
-            print('PLEASE')
+        new_image = G.synthesis(w, noise_mode=noise_mode)
+        new_image = (new_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255) # this is our 'previous chunk' we are trying to fit to
+
+        loss = torch.norm(w) + (clamp(float(i) / float(max_iter), .7, 1)) * calc_horizontal_image_similarity(prev_image, new_image) 
+        dw = torch.autograd.grad(outputs=loss, inputs=w) 
+        print(f'norm of my gradient is: {torch.norm(dw[0])}')
+        w_next = w - step_size * dw[0]
+        residual = torch.norm(w_next - w)
+
+        print(f'residual is {residual}')
+        print()
+        w = w_next
+        if (residual < 0.02):
+            print('residual limit has been reached')
             break
 
-    new_image = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-    new_image = (new_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8) # this is our 'previous chunk' we are trying to fit to
-    np.save(f'{outdir}/new_chunk', np.squeeze(new_image.to(torch.uint8).cpu().detach().numpy()))        
+    final_new_image = G.synthesis(w, noise_mode=noise_mode)
+    final_new_image = (final_new_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255) # this is our 'previous chunk' we are trying to fit to
+    np.save(f'{outdir}/new_chunk', np.squeeze(final_new_image.to(torch.uint8).cpu().detach().numpy()))        
     print('done')
-# ------------------------------------------------------------------------------------------------------------
+
+def clamp(num, min_value, max_value):
+   return max(min(num, max_value), min_value)
+
 def calc_horizontal_image_similarity(
         x_image,
         image_candidate
@@ -664,28 +668,225 @@ def calc_horizontal_image_similarity(
     """
     window_size = 64
 
-    right_window = x_image[:, -window_size:]
+    right_window = x_image[:, window_size:]
     left_window = image_candidate[:, :window_size]
 
-    # Convert the tensors to float for computation
-    right_float = right_window.float()
     left_float = left_window.float()
+    right_float = right_window.float()
 
-    # Compute the mean squared error (MSE)
-    norm = torch.mean((left_float - right_float) ** 2)
-    print(norm)
-
-    # Print the MSE value
-    print("Mean Squared Error (MSE):", norm)
-    similarity = norm
+    # Compute the norm error
+    similarity = torch.norm(left_float - right_float)
+    print(f'similarity of edges is: {similarity}')
 
     return similarity
+
+def calc_horizontal_image_similarity_MSE(
+        x_image,
+        image_candidate
+):    
+    """Calculate the horizontal similarity on the right side of the x_image and the left side of the image_candidate
+
+    """
+    window_size = 64
+
+    right_window = x_image[:, window_size:]
+    left_window = image_candidate[:, :window_size]
+
+    left_float = left_window.float()
+    right_float = right_window.float()
+
+    # Compute the mean squared error (MSE)
+    mse = torch.mean((left_float - right_float) ** 2)
+
+    # Print the MSE value
+    similarity = mse.item()
+
+    # Compute the mean squared error (MSE)
+    #similarity = torch.norm(left_float - right_float)
+    print(f'similarity of edges is: {similarity}')
+
+    return similarity
+# ---------------------------------------------------------------------------
+
+@click.command()
+@click.pass_context
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
+@click.option('--seeds', type=num_range, help='List of random seeds')
+@click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
+@click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
+@click.option('--diameter', type=float, help='diameter of loops', default=100.0, show_default=True)
+@click.option('--frames', type=int, help='how many frames to produce (with seeds this is frames between each step, with loops this is total length)', default=240, show_default=True)
+@click.option('--fps', type=int, help='framerate for video', default=24, show_default=True)
+@click.option('--increment', type=float, help='truncation increment value', default=0.01, show_default=True)
+@click.option('--interpolation', type=click.Choice(['linear', 'slerp', 'noiseloop', 'circularloop']), default='linear', help='interpolation type', required=True)
+@click.option('--easing',
+              type=click.Choice(['linear', 'easeInOutQuad', 'bounceEaseOut','circularEaseOut','circularEaseOut2']),
+              default='linear', help='easing method', required=True)
+@click.option('--network', 'network_pkl', help='Network pickle filename', required=True)
+@click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
+@click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
+@click.option('--process', type=click.Choice(['image', 'interpolation','truncation','interpolation-truncation']), default='image', help='generation method', required=True)
+@click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
+@click.option('--random_seed', type=int, help='random seed value (used in noise and circular loop)', default=0, show_default=True)
+@click.option('--scale-type',
+                type=click.Choice(['pad', 'padside', 'symm','symmside']),
+                default='pad', help='scaling method for --size', required=False)
+@click.option('--size', type=size_range, help='size of output (in format x-y)')
+@click.option('--seeds', type=num_range, help='List of random seeds')
+@click.option('--space', type=click.Choice(['z', 'w']), default='z', help='latent space', required=True)
+@click.option('--start', type=float, help='starting truncation value', default=0.0, show_default=True)
+@click.option('--stop', type=float, help='stopping truncation value', default=1.0, show_default=True)
+@click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
+
+def modify_low_resolution_data(
+    ctx: click.Context,
+    easing: str,
+    interpolation: str,
+    increment: Optional[float],
+    network_pkl: str,
+    process: str,
+    random_seed: Optional[int],
+    diameter: Optional[float],
+    scale_type: Optional[str],
+    size: Optional[List[int]],
+    seeds: Optional[List[int]],
+    space: str,
+    fps: Optional[int],
+    frames: Optional[int],
+    truncation_psi: float,
+    noise_mode: str,
+    outdir: str,
+    class_idx: Optional[int],
+    projected_w: Optional[str],
+    start: Optional[float],
+    stop: Optional[float],
+):
+    """Modify the low resolution data of a GAN during inference. Function by ks: 
+
+    """
+    
+    # custom size code from https://github.com/eps696/stylegan2ada/blob/master/src/_genSGAN2.py
+    if(size): 
+        print('render custom size: ',size)
+        print('padding method:', scale_type )
+        custom = True
+    else:
+        custom = False
+
+    G_kwargs = dnnlib.EasyDict()
+    G_kwargs.size = size 
+    G_kwargs.scale_type = scale_type
+
+    # mask/blend latents with external latmask or by splitting the frame
+    latmask = False #temp
+    if latmask is None:
+        nHW = [int(s) for s in a.nXY.split('-')][::-1]
+        assert len(nHW)==2, ' Wrong count nXY: %d (must be 2)' % len(nHW)
+        n_mult = nHW[0] * nHW[1]
+        # if a.verbose is True and n_mult > 1: print(' Latent blending w/split frame %d x %d' % (nHW[1], nHW[0]))
+        lmask = np.tile(np.asarray([[[[1]]]]), (1,n_mult,1,1))
+        Gs_kwargs.countHW = nHW
+        Gs_kwargs.splitfine = a.splitfine
+        lmask = torch.from_numpy(lmask).to(device)
+    # else:
+        # if a.verbose is True: print(' Latent blending with mask', a.latmask)
+        # n_mult = 2
+        # if os.path.isfile(a.latmask): # single file
+        #     lmask = np.asarray([[img_read(a.latmask)[:,:,0] / 255.]]) # [h,w]
+        # elif os.path.isdir(a.latmask): # directory with frame sequence
+        #     lmask = np.asarray([[img_read(f)[:,:,0] / 255. for f in img_list(a.latmask)]]) # [h,w]
+        # else:
+        #     print(' !! Blending mask not found:', a.latmask); exit(1)
+        # lmask = np.concatenate((lmask, 1 - lmask), 1) # [frm,2,h,w]
+    # lmask = torch.from_numpy(lmask).to(device)
+
+    print('Loading networks from "%s"...' % network_pkl)
+    print('testing_hooks')
+    device = torch.device('cuda')
+    with dnnlib.util.open_url(network_pkl) as f:
+        # G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+        G = legacy.load_network_pkl(f, custom=custom, **G_kwargs)['G_ema'].to(device) # type: ignore
+
+    os.makedirs(outdir, exist_ok=True)
+
+    # Labels.
+    label = torch.zeros([1, G.c_dim], device=device)
+    if G.c_dim != 0:
+        if class_idx is None:
+            ctx.fail('Must specify class label with --class when using a conditional network')
+        label[:, class_idx] = 1
+    else:
+        if class_idx is not None:
+            print ('warn: --class=lbl ignored when running on an unconditional network')
+
+    seed = 482
+    print('append again')
+
+    hook_combiner = HookCombiner()
+
+    module_we_want_to_hook = G.synthesis.b8
+    module_we_want_to_hook.register_forward_hook(hook_combiner.hook_fn)
+
+    prev_z = torch.tensor(np.random.RandomState(96).randn(1, G.z_dim), requires_grad=True).to(device) # generate z from gaussian noise
+    prev_image = G(prev_z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+    prev_image = (prev_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255) # this is our 'previous chunk' we are trying to fit to
+    np.save(f'{outdir}/pre_swap', np.squeeze(prev_image.to(torch.uint8).cpu().detach().numpy()))
+
+    # Use Pytorch hooks to modify the low res data 
+    module_we_want_to_hook.register_forward_hook(hook_combiner.hook_fn_combine)
+
+    prev_z = torch.tensor(np.random.RandomState(seed).randn(1, G.z_dim), requires_grad=True).to(device) # generate z from gaussian noise
+    prev_image = G(prev_z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
+    prev_image = (prev_image.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255) # this is our 'previous chunk' we are trying to fit to
+    np.save(f'{outdir}/post_swap', np.squeeze(prev_image.to(torch.uint8).cpu().detach().numpy()))
+
+def hook_fn_flip(module, input, output):
+    #print('updated 9')
+    #print(f'output[0] size: {output[0].size()}')
+    #print(f'output: {output}')
+
+    # Flip the values on the x and y axis of the 8, 8 of the (1, 512, 8, 8) vector
+    new_tensor = torch.flip(torch.flip(output[0], dims=[2]), dims=[3])
+
+    output = (new_tensor.cuda(), output[1])
+    return output
+    
+class HookCombiner:
+    def __init__(self):
+        self.list = []
+
+    def hook_fn(self, module, input, output):
+        self.list.append(output[0])
+        
+    def hook_fn_flip(self, module, input, output):
+        # Flip the values on the x and y axis of the 8, 8 of the (1, 512, 8, 8) vector
+        new_tensor = torch.flip(torch.flip(output[0], dims=[2]), dims=[3])
+        print(self.list[0])
+
+        output = (new_tensor.cuda(), output[1])
+        return output
+    
+    def hook_fn_combine(self, module, input, output):
+        print('combining differenter vectors')
+        prev_tensor = self.list[0]
+        size = prev_tensor.size(0)
+
+        # slice both tensors in half along the first dimension
+        half_size = size // 2
+        tensor1_half = prev_tensor[:half_size]
+        tensor2_half = output[0][half_size:]
+
+        # create a new tensor by concatenating the two halves
+        new_tensor = torch.cat((tensor1_half, tensor2_half), dim=0)
+        output = (new_tensor.cuda(), output[1])
+        return output
 
 
 #----------------------------------------------------------------------------
 
 if __name__ == "__main__":
     #generate_images() # pylint: disable=no-value-for-parameter
-    generate_stitch_images() # pylint: disable=no-value-for-parameter
+    #generate_stitch_images() # pylint: disable=no-value-for-parameter
+    modify_low_resolution_data() #pylint: disable=no-value-for-parameter
 
 #----------------------------------------------------------------------------
