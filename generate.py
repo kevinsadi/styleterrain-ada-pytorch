@@ -819,12 +819,12 @@ def modify_low_resolution_data(
         if class_idx is not None:
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
-    seed = 482
-    print('append again')
+    seed = 122
+    print('testing combine images, different seed pls')
 
     hook_combiner = HookCombiner()
 
-    module_we_want_to_hook = G.synthesis.b8
+    module_we_want_to_hook = G.synthesis.b128
     module_we_want_to_hook.register_forward_hook(hook_combiner.hook_fn)
 
     prev_z = torch.tensor(np.random.RandomState(96).randn(1, G.z_dim), requires_grad=True).to(device) # generate z from gaussian noise
@@ -861,24 +861,23 @@ class HookCombiner:
     def hook_fn_flip(self, module, input, output):
         # Flip the values on the x and y axis of the 8, 8 of the (1, 512, 8, 8) vector
         new_tensor = torch.flip(torch.flip(output[0], dims=[2]), dims=[3])
-        print(self.list[0])
 
         output = (new_tensor.cuda(), output[1])
         return output
     
     def hook_fn_combine(self, module, input, output):
-        print('combining differenter vectors')
+        print('just replace it lol, shallower')
         prev_tensor = self.list[0]
+        new_tensor = output[0]
         size = prev_tensor.size(0)
 
-        # slice both tensors in half along the first dimension
-        half_size = size // 2
-        tensor1_half = prev_tensor[:half_size]
-        tensor2_half = output[0][half_size:]
+        # Assuming the two input vectors are named vec1 and vec2
+        left_half = prev_tensor[:, :, :, :16]
+        right_half = new_tensor[:, :, :, 16:]
+        new_tensor = torch.cat((right_half, left_half), dim=3)
+        #output = (new_tensor.cuda(), output[1])
+        output = (prev_tensor, output[1])
 
-        # create a new tensor by concatenating the two halves
-        new_tensor = torch.cat((tensor1_half, tensor2_half), dim=0)
-        output = (new_tensor.cuda(), output[1])
         return output
 
 
